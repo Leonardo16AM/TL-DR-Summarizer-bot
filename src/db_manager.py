@@ -11,6 +11,49 @@ import numpy as np
 from neo4j import GraphDatabase
 from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
+from nltk.corpus import stopwords
+import re
+from symspellpy import SymSpell, Verbosity
+
+class TextCleaner:
+    def __init__(self, dictionary_path: str, max_edit_distance: int = 2):
+        """
+        Inicializa SymSpell con un diccionario predefinido.
+        
+        Parámetros:
+        - dictionary_path (str): Ruta al archivo del diccionario (formato: palabra,frecuencia).
+        - max_edit_distance (int): Distancia máxima de edición para sugerencias.
+        """
+        self.symspell = SymSpell(max_dictionary_edit_distance=max_edit_distance)
+        if not os.path.exists(dictionary_path):
+            raise FileNotFoundError(f"El diccionario '{dictionary_path}' no existe.")
+        
+        # Cargar diccionario en SymSpell
+        if not self.symspell.load_dictionary(dictionary_path, term_index=0, count_index=1):
+            raise RuntimeError("No se pudo cargar el diccionario.")
+    
+
+    def _correct_spelling(self, text: str) -> str:
+        """
+        Corrige errores ortográficos en un texto utilizando SymSpell.
+        
+        Parámetros:
+        - text (str): Texto a corregir.
+        
+        Retorna:
+        - str: Texto corregido.
+        """
+        corrected_words = []
+        for word in text.split():
+            suggestions = self.symspell.lookup(word, Verbosity.CLOSEST, max_edit_distance=2)
+            if suggestions:
+                # Usar la mejor sugerencia
+                corrected_words.append(suggestions[0].term)
+            else:
+                # Si no hay sugerencias, dejar la palabra original
+                corrected_words.append(word)
+        return " ".join(corrected_words)
+    
 
 load_dotenv()
 
@@ -31,8 +74,48 @@ class DBManager:
         # Ejemplo: 'bert-base-nli-mean-tokens', 'all-MiniLM-L6-v2', etc.
         self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
 
+        # Inicializar limpiador de texto
+        self.cleaner = TextCleaner(dictionary_path="spanish+english.txt")
+
         # Opcional: Crear índices o constraints en Neo4j al iniciar
         self._create_schema()
+
+    def _clean_text(self, text: str, to_lowercase: bool = False, remove_special_chars: bool = False, 
+                    correct_spelling: bool = False, remove_stopwords: bool = False, lang: str = "spanish+english") -> str:
+        """
+        Limpia el texto basado en los parámetros especificados.
+        """
+        cleaned_text = text
+
+        # Convertir a minúsculas (opcional)
+        if to_lowercase:
+            cleaned_text = cleaned_text.lower()
+
+        # Eliminar caracteres especiales (opcional)
+        if remove_special_chars:
+            # Nota: Mantener tildes y signos de puntuación básicos
+            pattern = r'[^a-zA-ZáéíóúüñÁÉÍÓÚÜÑ0-9\s.,;?!-]' if lang in ["spanish", "spanish+english"] else r'[^a-zA-Z0-9\s.,;?!-]'
+            cleaned_text = re.sub(pattern, '', cleaned_text)
+
+        # Corrección ortográfica (opcional, usando SymSpell o similar)
+        if correct_spelling:
+            cleaned_text = self.cleaner._correct_spelling(cleaned_text)
+
+        # Eliminar stopwords (opcional)
+        if remove_stopwords:
+            stop_words = []
+            if lang == "spanish+english":
+                stop_words_spanish = set(stopwords.words("spanish"))
+                stop_words_english = set(stopwords.words("english"))
+                stop_words = stop_words_spanish.union(stop_words_english)
+            else:
+                stop_words = set(stopwords.words(lang))
+            cleaned_text = ' '.join([word for word in cleaned_text.split() if word not in stop_words])
+
+        # Normalizar espacios
+        cleaned_text = re.sub(r'\s+', ' ', cleaned_text).strip()
+
+        return cleaned_text
 
     def close(self):
         """ Cierra la conexión al driver de Neo4j. """
@@ -57,6 +140,9 @@ class DBManager:
         """
         timestamp = int(time.time())
         embedding = self._compute_embedding(message_text)
+        
+        # Limpiar mensaje
+        clean_message_text = self._clean_text(message_text, to_lowercase = True, remove_special_chars = True, correct_spelling = True, remove_stopwords = False, lang = "spanish+english")
 
         # Crear un identificador único para el mensaje usando chat_id y telegram_message_id
         message_id = f"{chat_id}_{telegram_message_id}"
@@ -78,6 +164,7 @@ class DBManager:
                     user_id: $user_id,
                     username: $username,
                     text: $message_text,
+                    clean_text: $clean_message_text,
                     timestamp: $timestamp,
                     embedding: $embedding
                 })
@@ -88,6 +175,7 @@ class DBManager:
                 user_id=user_id,
                 username=username,
                 message_text=message_text,
+                clean_message_text=clean_message_text,
                 timestamp=timestamp,
                 embedding=embedding
             )

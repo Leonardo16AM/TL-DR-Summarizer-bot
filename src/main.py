@@ -13,6 +13,7 @@ import anthropic
 # Importamos el DBManager de nuestro archivo aparte
 from db_manager import DBManager
 
+MAX_MESSAGES_LIMIT = 300
 load_dotenv()
 
 logging.basicConfig(
@@ -138,8 +139,8 @@ async def handle_summarize(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("N must be a number.", parse_mode='Markdown')
         return
 
-    if n <= 0 or n > 1000:
-        await update.message.reply_text("N must be a number between 1 and 1000.", parse_mode='Markdown')
+    if n <= 0 or n > MAX_MESSAGES_LIMIT:
+        await update.message.reply_text(f"N must be a number between 1 and {MAX_MESSAGES_LIMIT}.", parse_mode='Markdown')
         return
 
     messages = db_manager.get_last_n_messages(chat_id, n)
@@ -156,8 +157,8 @@ async def handle_ask(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     question = " ".join(args)
-    # Obtenemos los últimos 1000 mensajes
-    messages = db_manager.get_last_n_messages(chat_id, 1000)
+    # Obtenemos los últimos MAX_MESSAGES_LIMIT mensajes
+    messages = db_manager.get_last_n_messages(chat_id, MAX_MESSAGES_LIMIT)
     response = answer_question(messages, question)
     await update.message.reply_text(response, parse_mode='Markdown')
 
@@ -196,10 +197,10 @@ async def message_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_to_message_id=reply_to_message_id
         )
 
-        # Controlamos que no exceda 1000
+        # Controlamos que no exceda MAX_MESSAGES_LIMIT
         count = db_manager.get_messages_count(chat_id)
-        if count > 1000:
-            excess = count - 1000
+        if count > MAX_MESSAGES_LIMIT:
+            excess = count - MAX_MESSAGES_LIMIT
             db_manager.delete_oldest_messages(chat_id, excess)
 
 def main():
