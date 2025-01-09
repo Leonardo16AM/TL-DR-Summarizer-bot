@@ -33,9 +33,9 @@ def guardar_diccionario(diccionario, archivo):
             f.write(f"{palabra} {frecuencia}\n")
 
 if __name__ == "__main__":
-    archivo_es = "spanish.txt"
-    archivo_en = "english.txt"
-    archivo_salida = "spanish+english.txt"
+    archivo_es = "dicts/spanish.txt"
+    archivo_en = "dicts/english.txt"
+    archivo_salida = "dicts/spanish+english.txt"
 
     # Cargar diccionarios
     diccionario_es = cargar_diccionario(archivo_es)

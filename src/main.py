@@ -9,7 +9,7 @@ import os
 from dotenv import load_dotenv
 from termcolor import colored as col
 import anthropic
-
+from voice_to_text import transcribe_with_local_whisper, convert_to_wav
 # Importamos el DBManager de nuestro archivo aparte
 from db_manager import DBManager
 
@@ -147,20 +147,16 @@ async def handle_summarize(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     args = context.args
 
     if len(args) != 1:
-        await update.message.reply_text(
-            "Usage: /summarize N",
-            parse_mode="Markdown"
-        )
-        return
-
-    try:
-        n = int(args[0])
-    except ValueError:
-        await update.message.reply_text(
-            "N must be a number.",
-            parse_mode="Markdown"
-        )
-        return
+        n=300
+    else:
+        try:
+            n = int(args[0])
+        except ValueError:
+            await update.message.reply_text(
+                "N must be a number.",
+                parse_mode="Markdown"
+            )
+            return
 
     if n <= 0 or n > MAX_MESSAGES_LIMIT:
         await update.message.reply_text(
@@ -235,6 +231,73 @@ async def message_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
             excess = count - MAX_MESSAGES_LIMIT
             db_manager.delete_oldest_messages(chat_id, excess)
 
+
+async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Maneja mensajes de voz (o audios) que llegan al bot:
+      1. Descarga el archivo.
+      2. Lo convierte a WAV.
+      3. Llama a Whisper local para obtener la transcripción.
+      4. Guarda la transcripción en la base de datos.
+      5. Envía la transcripción como mensaje de respuesta.
+    """
+    message = update.effective_message
+    chat_id = update.effective_chat.id
+    telegram_message_id = message.message_id
+    user = message.from_user
+    user_id = user.id if user else None
+    username = user.username if user and user.username else (user.full_name if user else None)
+
+    # Dependiendo de si el audio llega como 'voice' o 'audio'
+    if message.voice:
+        file_id = message.voice.file_id
+    elif message.audio:
+        file_id = message.audio.file_id
+    else:
+        return  # No es ni voice ni audio
+
+    # Descargamos el archivo OGG/MP3/lo que sea
+    file = await context.bot.get_file(file_id)
+    input_path = "temp_input_audio"
+    output_path = "temp_output_audio.wav"
+
+    await file.download_to_drive(custom_path=input_path)
+
+    # Convertimos a WAV
+    success = convert_to_wav(input_path, output_path)
+    if not success:
+        await update.message.reply_text("Error converting audio to WAV.")
+        return
+
+    # Llamamos a Whisper local para transcribir
+    transcription = transcribe_with_local_whisper(output_path)
+
+    # Guardamos la transcripción en la base de datos
+    db_manager.add_message(
+        chat_id=chat_id,
+        telegram_message_id=telegram_message_id,
+        user_id=user_id,
+        username=username,
+        message_text=transcription,
+        reply_to_chat_id=None,
+        reply_to_message_id=None
+    )
+
+    # Limpiamos archivos temporales
+    try:
+        os.remove(input_path)
+        os.remove(output_path)
+    except OSError:
+        pass
+
+    # Respondemos con el texto transcrito
+    await update.message.reply_text(
+        f"Transcription:\n{transcription}",
+        parse_mode='Markdown'
+    )
+
+
+
 def main():
     """Inicia el bot."""
     application = Application.builder().token(TOKEN).build()
@@ -243,6 +306,17 @@ def main():
     application.add_handler(CommandHandler("summarize", handle_summarize))
     application.add_handler(CommandHandler("ask", handle_ask))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_listener))
+
+
+    # Handler para voice/audio
+    application.add_handler(
+        MessageHandler(filters.AUDIO | filters.VOICE, handle_voice_message)
+    )
+
+    # Handler para texto
+    application.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, message_listener)
+    )
 
     application.run_polling()
 

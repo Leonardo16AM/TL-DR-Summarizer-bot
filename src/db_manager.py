@@ -75,7 +75,7 @@ class DBManager:
         self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
 
         # Inicializar limpiador de texto
-        self.cleaner = TextCleaner(dictionary_path="spanish+english.txt")
+        self.cleaner = TextCleaner(dictionary_path="dicts/spanish+english.txt")
 
         # Opcional: Crear índices o constraints en Neo4j al iniciar
         self._create_schema()
