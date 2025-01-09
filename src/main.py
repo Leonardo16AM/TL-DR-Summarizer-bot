@@ -77,7 +77,7 @@ def summarize_messages(messages):
     prompt = (
         "Please provide a summary of the following chat conversation.\n\n"
         "Include what has been discussed recently, the most discussed topics, and who said what.\n"
-        "Please answer using the same language as the conversation and use **bold** letters to highlight important things.\n\n"
+        "Please answer using the same language as the conversation, it must be a plain text in the same languaje as the original messages\n\n"
         "Conversation:\n"
         f"{formatted_messages}\n\n"
         "Summary:"
@@ -125,28 +125,60 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown'
     )
 
-async def handle_summarize(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Maneja el comando /summarize."""
+
+import re
+
+def escape_markdown(text: str) -> str:
+    """
+    Escapa los caracteres que pueden romper la interpretación
+    de Markdown en Telegram.
+    """
+    pattern = r'([\*\_\`\[\]\(\)])'
+    return re.sub(pattern, r'\\\1', text)
+
+async def handle_summarize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Maneja el comando /summarize.
+    
+    Este comando recibe un número N como argumento y genera
+    un resumen de los últimos N mensajes de la base de datos.
+    """
     chat_id = update.effective_chat.id
     args = context.args
+
     if len(args) != 1:
-        await update.message.reply_text("Usage: /summarize N", parse_mode='Markdown')
+        await update.message.reply_text(
+            "Usage: /summarize N",
+            parse_mode="Markdown"
+        )
         return
 
     try:
         n = int(args[0])
     except ValueError:
-        await update.message.reply_text("N must be a number.", parse_mode='Markdown')
+        await update.message.reply_text(
+            "N must be a number.",
+            parse_mode="Markdown"
+        )
         return
 
     if n <= 0 or n > MAX_MESSAGES_LIMIT:
-        await update.message.reply_text(f"N must be a number between 1 and {MAX_MESSAGES_LIMIT}.", parse_mode='Markdown')
+        await update.message.reply_text(
+            f"N must be a number between 1 and {MAX_MESSAGES_LIMIT}.",
+            parse_mode="Markdown"
+        )
         return
 
     messages = db_manager.get_last_n_messages(chat_id, n)
-    logger.info(col(messages, 'green'))
+    logger.info(col(messages, "green"))
+
     summary = summarize_messages(messages)
-    await update.message.reply_text(summary, parse_mode='Markdown')
+    summary = escape_markdown(summary)
+
+    await update.message.reply_text(
+        summary,
+        parse_mode="Markdown"
+    )
 
 async def handle_ask(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Maneja el comando /ask."""
