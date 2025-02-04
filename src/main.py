@@ -13,9 +13,11 @@ import anthropic
 
 import whisper 
 
+from voice_to_text import transcribe_with_local_whisper, convert_to_wav
 # Importamos el DBManager de nuestro archivo aparte
 from db_manager import DBManager
 
+MAX_MESSAGES_LIMIT = 300
 load_dotenv()
 
 logging.basicConfig(
@@ -79,7 +81,7 @@ def summarize_messages(messages):
     prompt = (
         "Please provide a summary of the following chat conversation.\n\n"
         "Include what has been discussed recently, the most discussed topics, and who said what.\n"
-        "Please answer using the same language as the conversation and use **bold** letters to highlight important things.\n\n"
+        "Please answer using the same language as the conversation, it must be a plain text in the same languaje as the original messages\n\n"
         "Conversation:\n"
         f"{formatted_messages}\n\n"
         "Summary:"
@@ -157,28 +159,56 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown'
     )
 
-async def handle_summarize(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Maneja el comando /summarize."""
+
+import re
+
+def escape_markdown(text: str) -> str:
+    """
+    Escapa los caracteres que pueden romper la interpretación
+    de Markdown en Telegram.
+    """
+    pattern = r'([\*\_\`\[\]\(\)])'
+    return re.sub(pattern, r'\\\1', text)
+
+async def handle_summarize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Maneja el comando /summarize.
+    
+    Este comando recibe un número N como argumento y genera
+    un resumen de los últimos N mensajes de la base de datos.
+    """
     chat_id = update.effective_chat.id
     args = context.args
+
     if len(args) != 1:
-        await update.message.reply_text("Usage: /summarize N", parse_mode='Markdown')
-        return
+        n=300
+    else:
+        try:
+            n = int(args[0])
+        except ValueError:
+            await update.message.reply_text(
+                "N must be a number.",
+                parse_mode="Markdown"
+            )
+            return
 
-    try:
-        n = int(args[0])
-    except ValueError:
-        await update.message.reply_text("N must be a number.", parse_mode='Markdown')
-        return
-
-    if n <= 0 or n > 1000:
-        await update.message.reply_text("N must be a number between 1 and 1000.", parse_mode='Markdown')
+    if n <= 0 or n > MAX_MESSAGES_LIMIT:
+        await update.message.reply_text(
+            f"N must be a number between 1 and {MAX_MESSAGES_LIMIT}.",
+            parse_mode="Markdown"
+        )
         return
 
     messages = db_manager.get_last_n_messages(chat_id, n)
-    logger.info(col(messages, 'green'))
+    logger.info(col(messages, "green"))
+
     summary = summarize_messages(messages)
-    await update.message.reply_text(summary, parse_mode='Markdown')
+    summary = escape_markdown(summary)
+
+    await update.message.reply_text(
+        summary,
+        parse_mode="Markdown"
+    )
 
 async def handle_ask(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Maneja el comando /ask."""
@@ -189,8 +219,8 @@ async def handle_ask(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     question = " ".join(args)
-    # Obtenemos los últimos 1000 mensajes
-    messages = db_manager.get_last_n_messages(chat_id, 1000)
+    # Obtenemos los últimos MAX_MESSAGES_LIMIT mensajes
+    messages = db_manager.get_last_n_messages(chat_id, MAX_MESSAGES_LIMIT)
     response = answer_question(messages, question)
     await update.message.reply_text(response, parse_mode='Markdown')
 
@@ -293,11 +323,78 @@ async def message_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_to_message_id=reply_to_message_id
         )
 
-        # Controlamos que no exceda 1000
+        # Controlamos que no exceda MAX_MESSAGES_LIMIT
         count = db_manager.get_messages_count(chat_id)
-        if count > 1000:
-            excess = count - 1000
+        if count > MAX_MESSAGES_LIMIT:
+            excess = count - MAX_MESSAGES_LIMIT
             db_manager.delete_oldest_messages(chat_id, excess)
+
+
+async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Maneja mensajes de voz (o audios) que llegan al bot:
+      1. Descarga el archivo.
+      2. Lo convierte a WAV.
+      3. Llama a Whisper local para obtener la transcripción.
+      4. Guarda la transcripción en la base de datos.
+      5. Envía la transcripción como mensaje de respuesta.
+    """
+    message = update.effective_message
+    chat_id = update.effective_chat.id
+    telegram_message_id = message.message_id
+    user = message.from_user
+    user_id = user.id if user else None
+    username = user.username if user and user.username else (user.full_name if user else None)
+
+    # Dependiendo de si el audio llega como 'voice' o 'audio'
+    if message.voice:
+        file_id = message.voice.file_id
+    elif message.audio:
+        file_id = message.audio.file_id
+    else:
+        return  # No es ni voice ni audio
+
+    # Descargamos el archivo OGG/MP3/lo que sea
+    file = await context.bot.get_file(file_id)
+    input_path = "temp_input_audio"
+    output_path = "temp_output_audio.wav"
+
+    await file.download_to_drive(custom_path=input_path)
+
+    # Convertimos a WAV
+    success = convert_to_wav(input_path, output_path)
+    if not success:
+        await update.message.reply_text("Error converting audio to WAV.")
+        return
+
+    # Llamamos a Whisper local para transcribir
+    transcription = transcribe_with_local_whisper(output_path)
+
+    # Guardamos la transcripción en la base de datos
+    db_manager.add_message(
+        chat_id=chat_id,
+        telegram_message_id=telegram_message_id,
+        user_id=user_id,
+        username=username,
+        message_text=transcription,
+        reply_to_chat_id=None,
+        reply_to_message_id=None
+    )
+
+    # Limpiamos archivos temporales
+    try:
+        os.remove(input_path)
+        os.remove(output_path)
+    except OSError:
+        pass
+
+    # Respondemos con el texto transcrito
+    await update.message.reply_text(
+        f"Transcription:\n{transcription}",
+        parse_mode='Markdown'
+    )
+
+
 
 def main():
     """Inicia el bot."""
@@ -306,6 +403,17 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("summarize", handle_summarize))
     application.add_handler(CommandHandler("ask", handle_ask))
+
+    # Handler para voice/audio
+    application.add_handler(
+        MessageHandler(filters.AUDIO | filters.VOICE, handle_voice_message)
+    )
+
+    # Handler para texto
+    application.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, message_listener)
+    )
+
 
     # Handler para voice/audio
     application.add_handler(
