@@ -11,7 +11,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-
+#region convert_to_wav
 def convert_to_wav(input_path, output_path):
     """
     Convierte un archivo de audio a formato WAV usando ffmpeg.
@@ -27,7 +27,8 @@ def convert_to_wav(input_path, output_path):
     except subprocess.CalledProcessError as e:
         logger.error(f"Error converting to WAV: {e}")
         return False
-
+    
+#region transcribe_with_local_whisper
 def transcribe_with_local_whisper(file_path):
     """
     Carga el modelo local de Whisper y transcribe el archivo.

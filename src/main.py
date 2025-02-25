@@ -12,6 +12,7 @@ import anthropic
 from voice_to_text import transcribe_with_local_whisper, convert_to_wav
 # Importamos el DBManager de nuestro archivo aparte
 from db_manager import DBManager
+import re
 
 MAX_MESSAGES_LIMIT = 300
 load_dotenv()
@@ -37,6 +38,7 @@ ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20240620")
 # Instanciamos la clase que maneja Neo4j
 db_manager = DBManager()
 
+#region call_claude_api
 def call_claude_api(api_key, user_message, model="claude-3-5-sonnet-20240620", 
                     max_tokens=1024, system=""):
     """
@@ -62,6 +64,7 @@ def call_claude_api(api_key, user_message, model="claude-3-5-sonnet-20240620",
         logger.error(f"Error communicating with Claude API: {e}")
         return "Sorry, there was an error processing your request."
 
+#region summarize_messages
 def summarize_messages(messages):
     """
     Le pedimos a Claude que genere un resumen de la conversación.
@@ -91,6 +94,7 @@ def summarize_messages(messages):
     )
     return summary
 
+#region answer_question
 def answer_question(messages, question):
     """
     Le pedimos a Claude que responda una pregunta basada en la conversación.
@@ -118,16 +122,16 @@ def answer_question(messages, question):
     )
     return response
 
+#region /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Maneja el comando /start."""
     await update.message.reply_text(
-        "Hello! I am a bot that can summarize and answer questions about the messages.",
+        "Hello! I am a bot that can summarize and answer questions about group messages.",
         parse_mode='Markdown'
     )
 
 
-import re
-
+#region escape_markdown
 def escape_markdown(text: str) -> str:
     """
     Escapa los caracteres que pueden romper la interpretación
@@ -136,6 +140,7 @@ def escape_markdown(text: str) -> str:
     pattern = r'([\*\_\`\[\]\(\)])'
     return re.sub(pattern, r'\\\1', text)
 
+#region /summarize
 async def handle_summarize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Maneja el comando /summarize.
@@ -176,6 +181,7 @@ async def handle_summarize(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         parse_mode="Markdown"
     )
 
+#region /ask
 async def handle_ask(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Maneja el comando /ask."""
     chat_id = update.effective_chat.id
@@ -190,6 +196,7 @@ async def handle_ask(update: Update, context: ContextTypes.DEFAULT_TYPE):
     response = answer_question(messages, question)
     await update.message.reply_text(response, parse_mode='Markdown')
 
+#region message_listener
 async def message_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Escucha mensajes que no son comandos y los almacena en la base de datos.
@@ -231,7 +238,7 @@ async def message_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
             excess = count - MAX_MESSAGES_LIMIT
             db_manager.delete_oldest_messages(chat_id, excess)
 
-
+#region handle_voice_message
 async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Maneja mensajes de voz (o audios) que llegan al bot:
@@ -297,7 +304,7 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
     )
 
 
-
+#region main
 def main():
     """Inicia el bot."""
     application = Application.builder().token(TOKEN).build()

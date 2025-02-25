@@ -15,6 +15,7 @@ from nltk.corpus import stopwords
 import re
 from symspellpy import SymSpell, Verbosity
 
+#region TextCleaner
 class TextCleaner:
     def __init__(self, dictionary_path: str, max_edit_distance: int = 2):
         """
@@ -32,7 +33,6 @@ class TextCleaner:
         if not self.symspell.load_dictionary(dictionary_path, term_index=0, count_index=1):
             raise RuntimeError("No se pudo cargar el diccionario.")
     
-
     def _correct_spelling(self, text: str) -> str:
         """
         Corrige errores ortográficos en un texto utilizando SymSpell.
@@ -57,6 +57,7 @@ class TextCleaner:
 
 load_dotenv()
 
+#region DBManager
 class DBManager:
     def __init__(self):
         """
