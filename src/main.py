@@ -13,6 +13,7 @@ from voice_to_text import transcribe_with_local_whisper, convert_to_wav
 # Importamos el DBManager de nuestro archivo aparte
 from db_manager import DBManager
 import re
+from perplexity import calculate_perplexity
 
 MAX_MESSAGES_LIMIT = 300
 load_dotenv()
@@ -196,6 +197,29 @@ async def handle_ask(update: Update, context: ContextTypes.DEFAULT_TYPE):
     response = answer_question(messages, question)
     await update.message.reply_text(response, parse_mode='Markdown')
 
+def not_emoji(text):
+    for i in text:
+        if i>='a' and i<='b':
+            return True
+    return False
+
+#region find_probable_reply
+def find_probable_reply(update,chat_id,text):
+    messages=db_manager.get_last_n_messages(chat_id, 10)
+    print(f">> {text}")
+    best=None
+    bestp=1000
+    for message in messages:
+        print(message)
+        p=calculate_perplexity("datificate/gpt2-small-spanish",'Mensaje: '+message[0]+' Respuesta: '+text)
+        print(f"{message[0]}:{p}")
+        if not_emoji(message[0]) and p<bestp:
+            bestp=p
+            best=message
+    if best:
+        print(col(f"El mensaje '{text}' probablemente  fue una tespuesta a: '{best[0]}'",'blue'))
+        return (chat_id,best[1])
+
 #region message_listener
 async def message_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -218,9 +242,14 @@ async def message_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_to_chat_id = reply_to_message.chat.id
             reply_to_message_id = reply_to_message.message_id
         else:
-            reply_to_chat_id = None
-            reply_to_message_id = None
-
+            reply_to_message=find_probable_reply(update,chat_id,text)
+            if reply_to_message:
+                reply_to_chat_id = reply_to_message[0]
+                reply_to_message_id = reply_to_message[1]
+            else:
+                reply_to_chat_id = None
+                reply_to_message_id = None
+                
         # Guardamos el mensaje
         db_manager.add_message(
             chat_id=chat_id,
