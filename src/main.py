@@ -5,6 +5,7 @@ from telegram import Update
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, filters, ContextTypes
 )
+from datetime import datetime
 import os
 from dotenv import load_dotenv
 from termcolor import colored as col
@@ -14,6 +15,8 @@ from voice_to_text import transcribe_with_local_whisper, convert_to_wav
 from db_manager import DBManager
 import re
 from perplexity import calculate_perplexity
+from interest_manager import InterestManager
+from cluster_utils import cluster_to_text, is_active_conversation, get_active_users_in_cluster
 
 MAX_MESSAGES_LIMIT = 300
 load_dotenv()
@@ -23,6 +26,22 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+from interest_manager import InterestManager
+from cluster_utils import cluster_to_text, is_active_conversation, get_active_users_in_cluster
+import traceback
+
+# Inicializa el InterestManager después del DBManager
+# Esta es una parte crítica - poner el logger antes para detectar problemas
+logger.info(col("Inicializando InterestManager...", "magenta"))
+try:
+    interest_manager = InterestManager()
+    logger.info(col("InterestManager inicializado correctamente", "green"))
+except Exception as e:
+    logger.error(f"Error al inicializar InterestManager: {e}")
+    logger.error(traceback.format_exc())
+    # Continuar sin el InterestManager en vez de bloquear todo el bot
+    interest_manager = None
 
 # Token de Telegram
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -205,7 +224,7 @@ def not_emoji(text):
 
 #region find_probable_reply
 def find_probable_reply(update,chat_id,text):
-    messages=db_manager.get_last_n_messages(chat_id, 10)
+    messages=db_manager.get_last_n_messages(chat_id, 5)
     print(f">> {text}")
     best=None
     bestp=1000
@@ -217,14 +236,16 @@ def find_probable_reply(update,chat_id,text):
             bestp=p
             best=message
     if best:
-        print(col(f"El mensaje '{text}' probablemente  fue una tespuesta a: '{best[0]}'",'blue'))
+        print(col(f"El mensaje '{text}' probablemente  fue una respuesta a: '{best[0]}'",'blue'))
         return (chat_id,best[1])
 
+last_notified={}
 #region message_listener
 async def message_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Escucha mensajes que no son comandos y los almacena en la base de datos.
     Verifica si es una respuesta (reply) a otro mensaje.
+    Analiza clusters activos y notifica a usuarios potencialmente interesados.
     """
     message = update.effective_message
     chat_id = update.effective_chat.id
@@ -242,7 +263,8 @@ async def message_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_to_chat_id = reply_to_message.chat.id
             reply_to_message_id = reply_to_message.message_id
         else:
-            reply_to_message=find_probable_reply(update,chat_id,text)
+            # reply_to_message = find_probable_reply(update, chat_id, text)
+            reply_to_message = None
             if reply_to_message:
                 reply_to_chat_id = reply_to_message[0]
                 reply_to_message_id = reply_to_message[1]
@@ -265,7 +287,95 @@ async def message_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
         count = db_manager.get_messages_count(chat_id)
         if count > MAX_MESSAGES_LIMIT:
             excess = count - MAX_MESSAGES_LIMIT
-            db_manager.delete_oldest_messages(chat_id, excess)
+            db_manager.delete_oldest_messages(chat_id, excess)  
+        
+        # Obtenemos el último cluster de mensajes
+        messages = db_manager.get_last_cluster(chat_id, 20, 30)
+        logger.info(col(f"Obtenido cluster con {len(messages)} mensajes", "cyan"))
+        
+        # Verificamos si la conversación está activa
+        if is_active_conversation(messages):
+            logger.info(col("Conversación activa detectada", "green"))
+            
+            # Obtener el texto del cluster para generar embedding
+            cluster_text = cluster_to_text(messages)
+            logger.info(col(f"Texto del cluster generado ({len(cluster_text)} caracteres)", "cyan"))
+            
+            if not cluster_text:
+                logger.warning("Cluster vacío, no se puede generar embedding")
+                return
+                
+            current_embedding = interest_manager.get_text_embedding(cluster_text)
+            
+            if current_embedding is None:
+                logger.warning("No se pudo generar embedding para el cluster")
+                return
+            
+            # Guardar el interés para los usuarios activos en este cluster
+            active_users = get_active_users_in_cluster(messages)
+            logger.info(col(f"Usuarios activos en el cluster: {len(active_users)}", "cyan"))
+            
+            for active_user_id, active_username in active_users:
+                if not active_user_id:
+                    continue
+                    
+                success = interest_manager.store_user_interest(
+                    active_user_id,
+                    active_username,
+                    chat_id,
+                    current_embedding
+                )
+                if success:
+                    logger.info(col(f"Guardado interés para {active_username or active_user_id}", "cyan"))
+                else:
+                    logger.warning(f"No se pudo guardar interés para usuario {active_username or active_user_id}")
+            
+            # Encontrar usuarios interesados
+            threshold = 0.8  # Ajusta según sea necesario
+            interested_users = interest_manager.find_interested_users(
+                chat_id,
+                current_embedding,
+                threshold
+            )
+            print(interested_users)
+            # Filtrar usuarios que ya están activos en el cluster actual
+            active_user_ids = [user_id for user_id, _ in active_users]
+            last_not = [user_id for user_id,_,_ in interested_users
+                if last_notified.get(user_id) is not None 
+                and abs(last_notified[user_id] - datetime.now().timestamp()) < 3600]
+
+            print(last_not)
+
+            users_to_notify = [
+                (user_id, username) 
+                for user_id, username, _ in interested_users 
+                if user_id not in active_user_ids
+                and user_id not in last_not
+            ]
+            print(users_to_notify)
+            for user,_ in users_to_notify:
+                last_notified[user]=datetime.now().timestamp()
+
+            if users_to_notify:
+                # Crear mensaje de notificación con @username (solo para los que tienen username)
+                mentions = [f"@{username}" for _, username in users_to_notify if username]
+                
+                if mentions:
+                    notification_text = "Esta conversación podría interesarles: " + " ".join(mentions)
+                    
+                    logger.info(col(f"Notificando a usuarios: {notification_text}", "yellow"))
+                    
+                    # Enviar notificación
+                    try:
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text=notification_text,
+                            reply_to_message_id=telegram_message_id
+                        )
+                    except Exception as e:
+                        logger.error(f"Error al enviar notificación: {e}")
+            else:
+                logger.info("No hay usuarios para notificar")
 
 #region handle_voice_message
 async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -341,23 +451,25 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("summarize", handle_summarize))
     application.add_handler(CommandHandler("ask", handle_ask))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_listener))
-
 
     # Handler para voice/audio
     application.add_handler(
         MessageHandler(filters.AUDIO | filters.VOICE, handle_voice_message)
     )
 
-    # Handler para texto
+    # Handler para texto - sólo agregar UNA vez
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, message_listener)
     )
 
+    logger.info(col("Bot iniciado, iniciando polling...", "green"))
     application.run_polling()
 
-    # Cerramos la conexión a Neo4j al final (opcional)
+    # Cerramos las conexiones a las bases de datos
+    logger.info(col("Cerrando conexiones a bases de datos...", "yellow"))
     db_manager.close()
+    if interest_manager is not None:
+        interest_manager.close()
 
 if __name__ == '__main__':
     main()
