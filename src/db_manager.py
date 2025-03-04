@@ -14,6 +14,9 @@ from dotenv import load_dotenv
 from nltk.corpus import stopwords
 import re
 from symspellpy import SymSpell, Verbosity
+from sklearn.cluster import KMeans
+from collections import Counter
+import re
 
 class TextCleaner:
     def __init__(self, dictionary_path: str, max_edit_distance: int = 2):
@@ -305,3 +308,93 @@ class DBManager:
         norm1 = np.linalg.norm(v1)
         norm2 = np.linalg.norm(v2)
         return dot / (norm1 * norm2 + 1e-10)
+
+        
+    def get_user_messages_and_embeddings(self, user_id: int):
+        """
+        Retorna una lista de tuplas (texto, embedding) de todos los mensajes escritos
+        por el usuario especificado.
+        """
+        with self.driver.session() as session:
+            result = session.run(
+                """
+                MATCH (m:Message {user_id: $user_id})
+                RETURN m.text AS text, m.embedding AS embedding
+                """,
+                user_id=user_id
+            )
+            
+            data = []
+            for record in result:
+                text = record["text"]
+                emb = record["embedding"]
+                if emb is not None:
+                    data.append((text, emb))
+            return data
+        
+
+
+    def cluster_user_embeddings(self, user_id: int, n_clusters: int = 5):
+        """
+        Agrupa en 'n_clusters' los mensajes de un usuario según la similitud
+        de sus embeddings. Devuelve un listado con el contenido de cada cluster
+        (mensajes y top de palabras).
+        """
+        # Obtener (texto, embedding) de todos los mensajes del usuario
+        data = self.get_user_messages_and_embeddings(user_id)
+        if not data:
+            return []
+        
+        # Separar en listas paralelas
+        texts = [d[0] for d in data]
+        embeddings = [d[1] for d in data]  # cada embedding es una list[float]
+        
+        # Convertir embeddings a array de NumPy (requerido por scikit-learn)
+        import numpy as np
+        X = np.array(embeddings, dtype=np.float32)
+
+        # Aplicar K-Means
+        kmeans = KMeans(n_clusters=n_clusters, n_init=10)
+        labels = kmeans.fit_predict(X)
+        
+        # Agrupar los mensajes por etiqueta de cluster
+        clusters_dict = {}
+        for label, text, emb in zip(labels, texts, embeddings):
+            if label not in clusters_dict:
+                clusters_dict[label] = {
+                    "mensajes": [],
+                    "top_palabras": []
+                }
+            clusters_dict[label]["mensajes"].append((text, emb))
+        
+        #    Extraer palabras más frecuentes por cluster 
+        #    para describir el tema de manera sencilla.
+        #    Aquí hacemos un conteo básico de tokens "simples".
+        for label, cluster_data in clusters_dict.items():
+            # Concatenar todos los textos en un solo string
+            all_text = " ".join([msg[0] for msg in cluster_data["mensajes"]])
+            # Tokenizar (muy básico) y filtrar palabras vacías, etc.:
+            tokens = re.findall(r"\w+", all_text.lower())
+            # Puedes usar tu método de limpieza si lo prefieres:
+            # tokens = self._clean_text(all_text, ...).split()
+            
+            # Contar tokens más frecuentes
+            counter = Counter(tokens)
+            # Tomar las top 5 palabras, por ejemplo
+            most_common = counter.most_common(5)
+            # Guardamos solo la lista de palabras (sin sus frecuencias) o con frecuencia
+            cluster_data["top_palabras"] = [w for w, freq in most_common]
+        
+        #    Generar lista final ordenada por label de cluster
+        #    (o devuélvelo como dict, según prefieras)
+        clusters_list = []
+        for label in sorted(clusters_dict.keys()):
+            clusters_list.append({
+                "cluster_id": label,
+                "mensajes": clusters_dict[label]["mensajes"],
+                "top_palabras": clusters_dict[label]["top_palabras"]
+            })
+        
+        return clusters_list
+
+

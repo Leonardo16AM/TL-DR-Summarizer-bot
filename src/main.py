@@ -11,8 +11,6 @@ from dotenv import load_dotenv
 from termcolor import colored as col
 import anthropic
 
-import whisper 
-
 from voice_to_text import transcribe_with_local_whisper, convert_to_wav
 # Importamos el DBManager de nuestro archivo aparte
 from db_manager import DBManager
@@ -121,35 +119,6 @@ def answer_question(messages, question):
         max_tokens=1024
     )
     return response
-
-def convert_to_wav(input_path, output_path):
-    """
-    Convierte un archivo de audio a formato WAV usando ffmpeg.
-    """
-    try:
-        subprocess.run(
-            ["ffmpeg", "-y", "-i", input_path, output_path],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
-        return True
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Error converting to WAV: {e}")
-        return False
-
-def transcribe_with_local_whisper(file_path):
-    """
-    Carga el modelo local de Whisper y transcribe el archivo.
-    """
-    # Se puede cambiar el modelo a "base", "medium", "large", etc.
-    model = whisper.load_model("small")
-    
-    # Transcribe localmente
-    result = model.transcribe(file_path)
-    # Extraemos el texto
-    text = result["text"]
-    return text.strip()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Maneja el comando /start."""

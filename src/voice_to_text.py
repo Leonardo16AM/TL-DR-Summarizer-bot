@@ -10,7 +10,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
+default_prompt = ['asere', 'quebola']
 
 def convert_to_wav(input_path, output_path):
     """
@@ -28,7 +28,7 @@ def convert_to_wav(input_path, output_path):
         logger.error(f"Error converting to WAV: {e}")
         return False
 
-def transcribe_with_local_whisper(file_path):
+def transcribe_with_local_whisper(file_path, custom_prompt=default_prompt):
     """
     Carga el modelo local de Whisper y transcribe el archivo.
     """
@@ -36,7 +36,10 @@ def transcribe_with_local_whisper(file_path):
     model = whisper.load_model("small")
     
     # Transcribe localmente
-    result = model.transcribe(file_path)
+    result = model.transcribe(
+        file_path,
+        initial_prompt=custom_prompt
+    )
     # Extraemos el texto
     text = result["text"]
     return text.strip()
