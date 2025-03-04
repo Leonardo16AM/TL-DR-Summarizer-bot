@@ -80,7 +80,7 @@ The bot automatically processes and transcribes voice messages, saving the trans
 
 ## Notes
 
-- Ensure the Neo4j server is running before starting the bot.
+- Ensure the Neo4j server is running before starting the bot and the database TLDR is running.
 - FFmpeg must be accessible in your system's PATH.
 - Update the `.env` file with appropriate credentials before running the bot.
 

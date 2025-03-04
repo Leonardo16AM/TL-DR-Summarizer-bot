@@ -1,5 +1,6 @@
 import math
 
+#region cargar_diccionario
 def cargar_diccionario(archivo):
     """Carga un diccionario de frecuencias desde un archivo."""
     diccionario = {}
@@ -12,6 +13,7 @@ def cargar_diccionario(archivo):
               print(f"Línea ignorada por formato incorrecto: {linea.strip()}")
     return diccionario
 
+#region combinar_diccionarios
 def combinar_diccionarios(diccionario_es, diccionario_en):
     """Combina dos diccionarios de frecuencias y calcula el promedio truncado."""
     combinado = {}
@@ -26,12 +28,14 @@ def combinar_diccionarios(diccionario_es, diccionario_en):
       combinado[palabra] = suma
     return combinado
 
+#region guardar diccionarios
 def guardar_diccionario(diccionario, archivo):
     """Guarda un diccionario de frecuencias en un archivo."""
     with open(archivo, 'w', encoding='utf-8') as f:
         for palabra, frecuencia in diccionario.items():
             f.write(f"{palabra} {frecuencia}\n")
 
+#region main
 if __name__ == "__main__":
     archivo_es = "dicts/spanish.txt"
     archivo_en = "dicts/english.txt"

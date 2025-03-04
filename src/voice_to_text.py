@@ -12,6 +12,8 @@ logger = logging.getLogger(__name__)
 
 default_prompt = ['asere', 'quebola']
 
+
+#region convert_to_wav
 def convert_to_wav(input_path, output_path):
     """
     Convierte un archivo de audio a formato WAV usando ffmpeg.

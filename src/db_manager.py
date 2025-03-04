@@ -18,6 +18,7 @@ from sklearn.cluster import KMeans
 from collections import Counter
 import re
 
+#region TextCleaner
 class TextCleaner:
     def __init__(self, dictionary_path: str, max_edit_distance: int = 2):
         """
@@ -35,7 +36,6 @@ class TextCleaner:
         if not self.symspell.load_dictionary(dictionary_path, term_index=0, count_index=1):
             raise RuntimeError("No se pudo cargar el diccionario.")
     
-
     def _correct_spelling(self, text: str) -> str:
         """
         Corrige errores ortográficos en un texto utilizando SymSpell.
@@ -60,6 +60,7 @@ class TextCleaner:
 
 load_dotenv()
 
+#region DBManager
 class DBManager:
     def __init__(self):
         """
@@ -195,6 +196,76 @@ class DBManager:
                     reply_to_db_id=reply_to_db_id
                 )
 
+    def get_last_cluster(self, chat_id: int, n: int = 10, max_depth: int = 50):
+        """
+        Retorna el último cluster de mensajes conectados por respuestas.
+        
+        Comienza con los últimos n mensajes y luego realiza un DFS a través
+        de las relaciones REPLIES_TO para obtener la conversación completa.
+        
+        Parámetros:
+        - chat_id (int): ID del chat
+        - n (int): Número inicial de mensajes recientes a considerar
+        - max_depth (int): Profundidad máxima del DFS para evitar bucles infinitos
+        
+        Retorna:
+        - List: Lista de tuplas (text, user_id, username) ordenadas cronológicamente
+        """
+        with self.driver.session() as session:
+            # Paso 1: Obtener los últimos n mensajes como punto de partida
+            result = session.run(
+                """
+                MATCH (m:Message {chat_id: $chat_id})
+                RETURN m
+                ORDER BY m.timestamp DESC
+                LIMIT $limit
+                """,
+                chat_id=chat_id,
+                limit=n
+            )
+            
+            # Recopilar los IDs de los mensajes iniciales
+            initial_message_ids = [record["m"]["id"] for record in result]
+            
+            if not initial_message_ids:
+                return []
+            
+            # Paso 2: Usar una longitud fija de ruta para obtener los mensajes relacionados
+            # La profundidad máxima está hardcodeada en la consulta
+            # Puedes cambiar el número 50 por otro valor fijo si lo necesitas
+            result = session.run(
+                """
+                MATCH (m:Message)
+                WHERE m.id IN $message_ids
+                CALL {
+                    WITH m
+                    MATCH path = (m)-[:REPLIES_TO*0..50]-(related)
+                    WHERE related.chat_id = $chat_id
+                    RETURN related
+                }
+                RETURN DISTINCT related as message
+                """,
+                message_ids=initial_message_ids,
+                chat_id=chat_id
+            )
+            
+            # Recopilar todos los mensajes del cluster
+            messages = []
+            for record in result:
+                m = record["message"]
+                messages.append({
+                    "text": m["text"],
+                    "user_id": m["user_id"],
+                    "username": m["username"],
+                    "timestamp": m["timestamp"]
+                })
+            
+            # Ordenar mensajes por timestamp (cronológicamente)
+            messages.sort(key=lambda x: x["timestamp"])
+            
+            # Convertir a formato consistente con get_last_n_messages
+            return [(m["text"], m["user_id"], m["username"]) for m in messages]
+        
     def get_last_n_messages(self, chat_id: int, n: int):
         """
         Retorna los últimos n mensajes de un chat, ordenados por timestamp DESC.
